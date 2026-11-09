@@ -1,10 +1,20 @@
 import os
+import re
 import sys
+import glob
 import time
 import tempfile
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import SAC
+
+# ---------------------------------------------------------------------
+# GRAVITY SETTING (used when training a new model)
+# ---------------------------------------------------------------------
+# Strength of gravity in m/s^2 (pulls straight down)
+# Earth 9.81, Moon 1.62, Mars 3.71, Jupiter 24.79, Pluto 0.62
+GRAVITY = 3.71
+DEFAULT_GRAVITY = 9.81   # assumed for old model files with no gravity in the name
 
 # ---------------------------------------------------------------------
 # REWARD SETTINGS
@@ -26,11 +36,14 @@ FLIP_PENALTY = 100.0          # one-off penalty when it flips
 # TRAINING / WATCHING SETTINGS
 # ---------------------------------------------------------------------
 TRAIN_STEPS = 200_000          # more = better, but slower (roughly 1 to 2 hours on CPU)
-MODEL_PATH = "cheetah_3leg_midhead_jump_sac"   # saved as cheetah_3leg_midhead_jump_sac.zip
+# Gravity is in the filename so each gravity gets its own trained model
+MODEL_BASE = "cheetah_3leg_midhead_jump"
+MODEL_PATH = f"{MODEL_BASE}_g{GRAVITY:.2f}_sac"   # e.g. cheetah_3leg_midhead_jump_g3.71_sac.zip
 WATCH_EPISODES = 10            # how many episodes to show before closing
 
 # Custom HalfCheetah model: the standard cheetah plus a third "middle" leg,
 # with the head moved to the middle of the torso
+# GRAVITY_Z is replaced with the real value in write_model_file()
 CHEETAH_XML = """
 <mujoco model="cheetah_3leg_midhead">
   <compiler angle="radian" inertiafromgeom="true" settotalmass="14"/>
@@ -39,7 +52,7 @@ CHEETAH_XML = """
     <geom conaffinity="0" condim="3" contype="1" friction=".4 .1 .1" rgba="0.8 0.6 .4 1" solimp="0.0 0.8 0.01" solref="0.02 1"/>
     <motor ctrllimited="true" ctrlrange="-1 1"/>
   </default>
-  <option gravity="0 0 -9.81" timestep="0.01"/>
+  <option gravity="0 0 GRAVITY_Z" timestep="0.01"/>
   <asset>
     <texture builtin="gradient" height="100" rgb1="1 1 1" rgb2="0 0 0" type="skybox" width="100"/>
     <texture builtin="checker" height="100" name="texplane" rgb1="0 0 0" rgb2="0.8 0.8 0.8" type="2d" width="100"/>
@@ -163,34 +176,91 @@ class JumpReward(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
 
-def write_model_file():
+def write_model_file(gravity):
+    # Put the chosen gravity into the XML (negative z = pulling down)
+    xml = CHEETAH_XML.replace("GRAVITY_Z", f"{-abs(gravity)}")
     # MuJoCo needs a real file path, so save the XML to a temp file
     path = os.path.join(tempfile.gettempdir(), "cheetah_3leg_midhead.xml")
     with open(path, "w") as f:
-        f.write(CHEETAH_XML)
+        f.write(xml)
     return path
 
 
-def make_env(render_mode=None):
+def make_env(gravity, render_mode=None):
     # v5 is required: it accepts xml_file and sizes the action/observation spaces from the model
-    env = gym.make("HalfCheetah-v5", xml_file=write_model_file(), render_mode=render_mode)
+    env = gym.make("HalfCheetah-v5", xml_file=write_model_file(gravity), render_mode=render_mode)
     return JumpReward(env)
 
 
+def gravity_from_filename(path):
+    # Reads the "_g3.71_" part of the filename; old files without it use Earth gravity
+    match = re.search(r"_g(\d+(?:\.\d+)?)_", os.path.basename(path))
+    return float(match.group(1)) if match else DEFAULT_GRAVITY
+
+
+def find_models():
+    # Only this body's own models, so a model for a different body can't be picked by mistake
+    found = glob.glob(f"{MODEL_BASE}_g*_sac.zip") + glob.glob(f"{MODEL_BASE}_sac.zip")
+    return sorted(set(found))
+
+
+def choose_model():
+    # --model some_file.zip picks a model directly
+    if "--model" in sys.argv:
+        i = sys.argv.index("--model")
+        if i + 1 < len(sys.argv):
+            path = sys.argv[i + 1]
+            if not path.endswith(".zip"):
+                path += ".zip"
+            if os.path.exists(path):
+                return path
+            print(f"Could not find {path}")
+        return None
+
+    zips = find_models()
+    if not zips:
+        return None
+    if len(zips) == 1:
+        print(f"Using the only model found: {zips[0]}")
+        return zips[0]
+
+    # More than one model: show a menu
+    print("\nSaved models:")
+    for n, path in enumerate(zips, start=1):
+        size_mb = os.path.getsize(path) / 1_000_000
+        modified = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
+        print(f"  {n}: {path}  (gravity {gravity_from_filename(path)} m/s^2, "
+              f"{size_mb:.1f} MB, saved {modified})")
+    print("  T: train a new model instead")
+
+    while True:
+        choice = input(f"Pick a model (1-{len(zips)}) or T: ").strip().lower()
+        if choice == "t":
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(zips):
+            return zips[int(choice) - 1]
+        print("Not a valid choice, try again.")
+
+
 def train():
-    print(f"Training 3-legged middle-head cheetah for {TRAIN_STEPS} steps (no window, this takes a while)...")
-    env = make_env(render_mode=None)   # no rendering = much faster training
+    print(f"Training 3-legged middle-head jumping cheetah at gravity {GRAVITY} m/s^2 "
+          f"for {TRAIN_STEPS} steps (no window, this takes a while)...")
+    env = make_env(GRAVITY, render_mode=None)   # no rendering = much faster training
     model = SAC("MlpPolicy", env, verbose=1)
     model.learn(total_timesteps=TRAIN_STEPS)
     model.save(MODEL_PATH)
     env.close()
     print(f"Saved trained model to {MODEL_PATH}.zip")
+    return MODEL_PATH + ".zip"
 
 
-def watch():
-    env = make_env(render_mode="human")
-    model = SAC.load(MODEL_PATH, env=env)
+def watch(model_file):
+    gravity = gravity_from_filename(model_file)   # run it in the gravity it was trained in
+    env = make_env(gravity, render_mode="human")
+    model = SAC.load(model_file, env=env)
 
+    print(f"Model: {model_file}")
+    print(f"Gravity: {gravity} m/s^2")
     print(f"Action space: {env.action_space}")            # Box(-1, 1, (9,), float32)
     print(f"Observation space: {env.observation_space}")
     observation, info = env.reset(seed=42)
@@ -228,9 +298,13 @@ def watch():
 
 
 def main():
-    if "--train" in sys.argv or not os.path.exists(MODEL_PATH + ".zip"):
-        train()
-    watch()
+    if "--train" in sys.argv:
+        model_file = train()
+    else:
+        model_file = choose_model()
+        if model_file is None:
+            model_file = train()
+    watch(model_file)
 
 
 if __name__ == "__main__":
@@ -240,9 +314,16 @@ if __name__ == "__main__":
 """
 Custom 3-legged HalfCheetah with middle head (Gymnasium HalfCheetah-v5 with xml_file)
 
+How to run:
+  python this_file.py                    menu of saved models for this body (or trains if none exist)
+  python this_file.py --model name.zip   watch a specific model
+  python this_file.py --train            train a new model at GRAVITY, then watch it
+
+Gravity: new models train at GRAVITY (currently 3.71 m/s^2, Mars).
+         Watching reads gravity from the filename (_g3.71_); untagged files use 9.81.
 Head: fixed geom at the middle of the torso (no joint, no action)
-Reward: AntiFlipReward wrapper (forward + alive - control - tilt, big penalty and episode end past 85 degrees)
-Policy: SAC from Stable-Baselines3, saved to cheetah_3leg_midhead_sac.zip
+Reward: JumpReward wrapper (height + rise + airtime + forward + alive - control - tilt, big penalty and episode end past 85 degrees)
+Policy: SAC from Stable-Baselines3, saved as cheetah_3leg_midhead_jump_g<gravity>_sac.zip
 Action space: Box(-1, 1, (9,), float32)
 All joints are hinges, unit is torque (N m).
 

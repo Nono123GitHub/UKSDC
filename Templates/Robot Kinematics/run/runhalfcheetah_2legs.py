@@ -1,143 +1,20 @@
-# =====================================================================
-# MINI GUIDE: CUSTOMISING YOUR LIMB (edit the CHEETAH_XML string)
-# =====================================================================
-#
-# How a limb is built
-#   A limb is a chain of nested <body> blocks: thigh > shin > foot.
-#   Each <body> holds 3 things:
-#     <joint>  the hinge it rotates around
-#     <geom>   the visible, solid capsule (the "bone")
-#     <body>   the next segment down the chain (optional)
-#   Every joint also needs a <motor> in <actuator>, or it can't be driven.
-#
-# All angles are in RADIANS. Degrees to radians: degrees * 0.01745
-#   (30 deg = 0.52, 45 deg = 0.785, 90 deg = 1.57)
-#
-# ---------------------------------------------------------------------
-# 1. MOVE WHERE THE LIMB ATTACHES
-#    <body name="fthigh" pos="x y z">
-#      x: along the torso, -0.5 = back end, 0 = middle, 0.5 = front end
-#      y: sideways, purely visual (the cheetah is 2D)
-#      z: up/down, negative = hangs lower
-#
-# 2. CHANGE A SEGMENT'S LENGTH OR THICKNESS
-#    <geom size="radius half_length">
-#      Full length of the capsule = 2 * half_length
-#      e.g. size="0.046 .2" gives a 0.4 long bone
-#
-# 3. CHANGE A SEGMENT'S RESTING ANGLE
-#    <geom axisangle="0 1 0 a">
-#      a = 0 points straight down, positive tilts one way, negative the other
-#
-# 4. KEEP THE BONE ATTACHED TO ITS JOINT (important!)
-#    After changing half_length (h) or angle (a), fix the geom's pos:
-#      geom pos = ( -h*sin(a), 0, -h*cos(a) )
-#    and fix the NEXT body's pos so it starts at the end of this bone:
-#      child body pos = ( -2*h*sin(a), 0, -2*h*cos(a) )
-#    Quick helper:
-#      import math
-#      h, a = 0.133, 0.52
-#      print(-h*math.sin(a), -h*math.cos(a))          # geom pos x, z
-#      print(-2*h*math.sin(a), -2*h*math.cos(a))      # child body pos x, z
-#
-# 5. CHANGE HOW FAR A JOINT CAN BEND
-#    <joint range="min max">    e.g. range="-1 .7"
-#      Wider range = floppier, more flexible limb
-#
-# 6. CHANGE HOW SPRINGY OR SLUGGISH A JOINT FEELS
-#    <joint stiffness="180" damping="4.5">
-#      stiffness: spring pulling the joint back to its resting angle
-#      damping:   resistance to moving fast (higher = smoother, slower)
-#
-# 7. CHANGE HOW STRONG A MOTOR IS
-#    <motor gear="120" joint="fthigh">
-#      torque = action (-1 to 1) * gear
-#      Thighs are usually strongest, feet weakest
-#
-# 8. CHANGE THE COLOUR
-#    <geom rgba="R G B A">    values 0 to 1, e.g. "0.4 0.6 0.9 1" = blue
-#
-# 9. ADD ANOTHER SEGMENT (e.g. a toe under the foot)
-#    Nest a new <body> inside the foot's <body>, give it a <joint> and
-#    a <geom>, then add a matching <motor> line in <actuator>.
-#
-# 10. ADD A WHOLE NEW LEG
-#    Copy an entire leg block, paste it inside <body name="torso">,
-#    change its pos, and RENAME EVERY name="..." so none repeat.
-#    Then add one <motor> per new joint.
-#
-# 11. REMOVE A SEGMENT OR LEG
-#    Delete its <body> block AND its <motor> lines, or MuJoCo will crash
-#    with "unknown joint".
-#
-# 12. MOVE THE HEAD
-#    The head is a single <geom name="head"> inside the torso body.
-#    It has no joint, so it's welded on. Change its pos x to slide it
-#    along the torso (currently .6 = just past the front end).
-#
-# ---------------------------------------------------------------------
-# ACTION SPACE RULES
-#   - Action size = number of <motor> lines (updates automatically in v5)
-#   - Action order = order of the <motor> lines, top to bottom
-#   - Update the docstring at the bottom if you add, remove or reorder
-#
-# COMMON ERRORS
-#   "repeated name"      two things share a name, rename one
-#   "unknown joint"      a <motor> points to a joint that doesn't exist
-#   Limb floats apart    geom/body pos not updated (see step 4)
-#   Cheetah flips a lot  motor gear too high or joint range too wide
-#   Model won't load     you changed the body, retrain with --train
-# =====================================================================
-#
-# =====================================================================
-# MINI GUIDE: THE ANTI-FLIP REWARD (edit the settings below the imports)
-# =====================================================================
-#
-# This is reinforcement learning (RL):
-#   Environment = the standard 2-legged HalfCheetah simulation
-#   Agent       = the SAC neural network that picks the 6 torques
-#   Reward      = the score below, which the agent learns to maximise
-#
-# Every step the cheetah gets:
-#   + forward * speed            run to the right
-#   - control * torque^2         don't waste energy
-#   + alive                      small bonus just for not having flipped
-#   - upright * |tilt angle|     stay level
-# And if |tilt angle| > FLIP_ANGLE (85 degrees):
-#   - FLIP_PENALTY, and the episode ends immediately
-#
-# How it knows it flipped:
-#   data.qpos[2] is the "rooty" joint, the whole torso's tilt in radians
-#   (0 = level). It's wrapped to -pi..pi so spinning round once doesn't
-#   read as 6.28, then compared against FLIP_ANGLE.
-#
-# Why "alive" matters: without it, a struggling cheetah earns negative
-# reward each step and might LEARN to flip on purpose to end the
-# episode early. The alive bonus makes staying upright always worth it.
-#
-# Tuning:
-#   Still flips?           raise upright or FLIP_PENALTY, or lower FLIP_ANGLE
-#   Upright but too slow?  raise forward (e.g. 2.0)
-#   Jittery legs?          raise control
-#
-# When things stop:
-#   Training  stops after TRAIN_STEPS, saves the model, then watching starts
-#   Watching  runs until WATCH_EPISODES is reached or you press Ctrl+C
-#   Episode   resets on a flip, or after 1000 steps (built-in time limit)
-#
-# Running:
-#   python cheetah_2leg.py           train if no saved model, then watch
-#   python cheetah_2leg.py --train   always retrain, then watch
-#   Changing the reward or body means you must retrain (--train).
-# =====================================================================
-
 import os
+import re
 import sys
+import glob
 import time
 import tempfile
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import SAC
+
+# ---------------------------------------------------------------------
+# GRAVITY SETTING (used when training a new model)
+# ---------------------------------------------------------------------
+# Strength of gravity in m/s^2 (pulls straight down)
+# Earth 9.81, Moon 1.62, Mars 3.71, Jupiter 24.79, Pluto 0.62
+GRAVITY = 3.71
+DEFAULT_GRAVITY = 9.81   # assumed for old model files with no gravity in the name
 
 # ---------------------------------------------------------------------
 # REWARD SETTINGS
@@ -155,10 +32,13 @@ FLIP_PENALTY = 100.0          # one-off penalty when it flips
 # TRAINING / WATCHING SETTINGS
 # ---------------------------------------------------------------------
 TRAIN_STEPS = 200_000          # more = better, but slower (roughly 1 to 2 hours on CPU)
-MODEL_PATH = "cheetah_2leg_sac"   # saved as cheetah_2leg_sac.zip
+# Gravity is in the filename so each gravity gets its own trained model
+MODEL_BASE = "cheetah_2leg"
+MODEL_PATH = f"{MODEL_BASE}_g{GRAVITY:.2f}_sac"   # e.g. cheetah_2leg_g3.71_sac.zip
 WATCH_EPISODES = 10            # how many episodes to show before closing
 
 # Standard 2-legged HalfCheetah body, written out so you can customise it with the guide above
+# GRAVITY_Z is replaced with the real value in write_model_file()
 CHEETAH_XML = """
 <mujoco model="cheetah_2leg">
   <compiler angle="radian" inertiafromgeom="true" settotalmass="14"/>
@@ -167,15 +47,15 @@ CHEETAH_XML = """
     <geom conaffinity="0" condim="3" contype="1" friction=".4 .1 .1" rgba="0.8 0.6 .4 1" solimp="0.0 0.8 0.01" solref="0.02 1"/>
     <motor ctrllimited="true" ctrlrange="-1 1"/>
   </default>
-  <option gravity="0 0 -9.81" timestep="0.01"/>
+  <option gravity="0 0 GRAVITY_Z" timestep="0.01"/>
   <asset>
     <texture builtin="gradient" height="100" rgb1="1 1 1" rgb2="0 0 0" type="skybox" width="100"/>
     <texture builtin="checker" height="100" name="texplane" rgb1="0 0 0" rgb2="0.8 0.8 0.8" type="2d" width="100"/>
-    <material name="MatPlane" reflectance="0.5" shininess="1" specular="1" texrepeat="60 60" texture="texplane"/>
+    <material name="MatPlane" reflectance="0.5" shininess="1" specular="1" texrepeat="1500 60" texture="texplane"/>
   </asset>
   <worldbody>
     <light cutoff="100" diffuse="1 1 1" dir="0 0 -1.3" directional="true" exponent="1" pos="0 0 1.3" specular=".1 .1 .1"/>
-    <geom conaffinity="1" condim="3" material="MatPlane" name="floor" pos="0 0 0" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane"/>
+    <geom conaffinity="1" condim="3" material="MatPlane" name="floor" pos="0 0 0" rgba="0.8 0.9 0.8 1" size="1000 40 40" type="plane"/>
     <body name="torso" pos="0 0 .7">
       <camera name="track" mode="trackcom" pos="0 -3 0.3" xyaxes="1 0 0 0 0 1"/>
       <joint armature="0" axis="1 0 0" damping="0" limited="false" name="rootx" pos="0 0 0" stiffness="0" type="slide"/>
@@ -256,34 +136,91 @@ class AntiFlipReward(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
 
-def write_model_file():
+def write_model_file(gravity):
+    # Put the chosen gravity into the XML (negative z = pulling down)
+    xml = CHEETAH_XML.replace("GRAVITY_Z", f"{-abs(gravity)}")
     # MuJoCo needs a real file path, so save the XML to a temp file
     path = os.path.join(tempfile.gettempdir(), "cheetah_2leg.xml")
     with open(path, "w") as f:
-        f.write(CHEETAH_XML)
+        f.write(xml)
     return path
 
 
-def make_env(render_mode=None):
+def make_env(gravity, render_mode=None):
     # v5 is required: it accepts xml_file and sizes the action/observation spaces from the model
-    env = gym.make("HalfCheetah-v5", xml_file=write_model_file(), render_mode=render_mode)
+    env = gym.make("HalfCheetah-v5", xml_file=write_model_file(gravity), render_mode=render_mode)
     return AntiFlipReward(env)
 
 
+def gravity_from_filename(path):
+    # Reads the "_g3.71_" part of the filename; old files without it use Earth gravity
+    match = re.search(r"_g(\d+(?:\.\d+)?)_", os.path.basename(path))
+    return float(match.group(1)) if match else DEFAULT_GRAVITY
+
+
+def find_models():
+    # Only this body's own models, so a model for a different body can't be picked by mistake
+    found = glob.glob(f"{MODEL_BASE}_g*_sac.zip") + glob.glob(f"{MODEL_BASE}_sac.zip")
+    return sorted(set(found))
+
+
+def choose_model():
+    # --model some_file.zip picks a model directly
+    if "--model" in sys.argv:
+        i = sys.argv.index("--model")
+        if i + 1 < len(sys.argv):
+            path = sys.argv[i + 1]
+            if not path.endswith(".zip"):
+                path += ".zip"
+            if os.path.exists(path):
+                return path
+            print(f"Could not find {path}")
+        return None
+
+    zips = find_models()
+    if not zips:
+        return None
+    if len(zips) == 1:
+        print(f"Using the only model found: {zips[0]}")
+        return zips[0]
+
+    # More than one model: show a menu
+    print("\nSaved models:")
+    for n, path in enumerate(zips, start=1):
+        size_mb = os.path.getsize(path) / 1_000_000
+        modified = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
+        print(f"  {n}: {path}  (gravity {gravity_from_filename(path)} m/s^2, "
+              f"{size_mb:.1f} MB, saved {modified})")
+    print("  T: train a new model instead")
+
+    while True:
+        choice = input(f"Pick a model (1-{len(zips)}) or T: ").strip().lower()
+        if choice == "t":
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(zips):
+            return zips[int(choice) - 1]
+        print("Not a valid choice, try again.")
+
+
 def train():
-    print(f"Training 2-legged cheetah for {TRAIN_STEPS} steps (no window, this takes a while)...")
-    env = make_env(render_mode=None)   # no rendering = much faster training
+    print(f"Training 2-legged cheetah at gravity {GRAVITY} m/s^2 "
+          f"for {TRAIN_STEPS} steps (no window, this takes a while)...")
+    env = make_env(GRAVITY, render_mode=None)   # no rendering = much faster training
     model = SAC("MlpPolicy", env, verbose=1)
     model.learn(total_timesteps=TRAIN_STEPS)
     model.save(MODEL_PATH)
     env.close()
     print(f"Saved trained model to {MODEL_PATH}.zip")
+    return MODEL_PATH + ".zip"
 
 
-def watch():
-    env = make_env(render_mode="human")
-    model = SAC.load(MODEL_PATH, env=env)
+def watch(model_file):
+    gravity = gravity_from_filename(model_file)   # run it in the gravity it was trained in
+    env = make_env(gravity, render_mode="human")
+    model = SAC.load(model_file, env=env)
 
+    print(f"Model: {model_file}")
+    print(f"Gravity: {gravity} m/s^2")
     print(f"Action space: {env.action_space}")            # Box(-1, 1, (6,), float32)
     print(f"Observation space: {env.observation_space}")
     observation, info = env.reset(seed=42)
@@ -321,9 +258,13 @@ def watch():
 
 
 def main():
-    if "--train" in sys.argv or not os.path.exists(MODEL_PATH + ".zip"):
-        train()
-    watch()
+    if "--train" in sys.argv:
+        model_file = train()
+    else:
+        model_file = choose_model()
+        if model_file is None:
+            model_file = train()
+    watch(model_file)
 
 
 if __name__ == "__main__":
@@ -333,9 +274,16 @@ if __name__ == "__main__":
 """
 Standard 2-legged HalfCheetah (Gymnasium HalfCheetah-v5 with xml_file)
 
+How to run:
+  python this_file.py                    menu of saved models for this body (or trains if none exist)
+  python this_file.py --model name.zip   watch a specific model
+  python this_file.py --train            train a new model at GRAVITY, then watch it
+
+Gravity: new models train at GRAVITY (currently 3.71 m/s^2, Mars).
+         Watching reads gravity from the filename (_g3.71_); untagged files use 9.81.
 Head: fixed geom at the front of the torso (no joint, no action)
 Reward: AntiFlipReward wrapper (forward + alive - control - tilt, big penalty and episode end past 85 degrees)
-Policy: SAC from Stable-Baselines3, saved to cheetah_2leg_sac.zip
+Policy: SAC from Stable-Baselines3, saved as cheetah_2leg_g<gravity>_sac.zip
 Action space: Box(-1, 1, (6,), float32)
 All joints are hinges, unit is torque (N m).
 
